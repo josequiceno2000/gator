@@ -11,15 +11,15 @@ type Config struct {
 	CurrentUsername string `json:"current_user_name,omitempty"`
 }
 
+const configFileName = ".gatorconfig.json"
+
 func READ() (Config, error) {
 	newStruct := Config{}
-	homeDirectory, err := os.UserHomeDir()
+
+	filePath, err := getConfigFilePath()
 	if err != nil {
 		return newStruct, err
 	}
-
-	fileName := ".gatorconfig.json"
-	filePath := filepath.Join(homeDirectory, fileName)
 
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -37,4 +37,31 @@ func READ() (Config, error) {
 func (c *Config) SetUser(username string) error {
 	c.CurrentUsername = username
 	return write(*c)
+}
+
+func getConfigFilePath() (string, error) {
+	homeDirectory, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(homeDirectory, configFileName), nil
+}
+
+func write(c Config) error {
+	filePath, err := getConfigFilePath()
+	if err != nil {
+		return err
+	}
+
+	data, err := json.MarshalIndent(c, "", " ")
+	if err != nil {
+		return err
+	}
+
+	err = os.WriteFile(filePath, data, 0600)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
