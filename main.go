@@ -15,6 +15,77 @@ import (
 	_ "github.com/lib/pq"
 )
 
+func handlerFeeds(s * state, cmd command) error {
+	feeds, err := s.DB.GetFeedsWithUserNames(context.Background())
+	if err != nil {
+		return fmt.Errorf("feeds: failed to get feeds: %w", err)
+	}
+
+	for _, feed := range feeds {
+		fmt.Printf("Name: %s, URL: %s, User: %s\n", feed.Name, feed.Url, feed.UserName)
+	}
+
+	return nil
+}
+
+func handlerAddFeed(s *state, cmd command) error {
+	if len(cmd.Arguments) < 2 {
+		return errors.New("addfeed: name and url arguments are required")
+	}
+
+	name := cmd.Arguments[0]
+	url := cmd.Arguments[1]
+
+	user, err := s.DB.GetUser(context.Background(), s.CfgPointer.CurrentUsername)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("addfeed: user '%s' does not exist", s.CfgPointer.CurrentUsername)
+		}
+		return fmt.Errorf("addfeed: failed to get user: %w", err)
+	}
+
+	feed, err := s.DB.CreateFeed(context.Background(), database.CreateFeedParams{
+		ID: uuid.New(),
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+		Name: name,
+		Url: url,
+		UserID: user.ID,
+	})
+
+	if err != nil {
+		return fmt.Errorf("addfeed: failed to create feed: %w", err)
+	}
+
+	fmt.Printf("Feed created: %+v\n", feed)
+	return nil
+}
+
+func handlerAgg(s *state, cmd command) error {
+	feed, err := fetchFeed(context.Background(), "https://wagslane.dev/index.xml")
+	if err != nil {
+		return fmt.Errorf("agg: failed to fetch feed %w", err)
+	}
+	fmt.Printf("%+v\n", feed)
+	return nil
+}
+
+func handlerUsers(s *state, cmd command) error {
+	users, err := s.DB.GetUsers(context.Background())
+	if err != nil {
+		return fmt.Errorf("users: failed to get users: %w", err)
+	}
+
+	for _, user := range users {
+		if user == s.CfgPointer.CurrentUsername {
+			fmt.Printf("* %s (current)\n", user)
+		} else {
+			fmt.Printf("* %s\n", user)
+		}
+	}
+	return nil
+}
+
 func handlerRegister(s *state, cmd command) error {
 	if len(cmd.Arguments) == 0 {
 		return errors.New("register command requires a username argument")
@@ -50,7 +121,7 @@ func handlerRegister(s *state, cmd command) error {
 }
 
 func handlerReset(s *state, cmd command) error {
-	err := s.DB.DeletaAllUsers((context.Background()))
+	err := s.DB.DeleteAllUsers((context.Background()))
 	if err != nil {
 		return fmt.Errorf("reset: failed to delete all users: %w", err)
 	}
@@ -80,6 +151,10 @@ func main() {
 	cmdRegistry.register("login", handlerLogin)
 	cmdRegistry.register("register", handlerRegister)
 	cmdRegistry.register("reset", handlerReset)
+	cmdRegistry.register("users", handlerUsers)
+	cmdRegistry.register("agg", handlerAgg)
+	cmdRegistry.register("addfeed", handlerAddFeed)
+	cmdRegistry.register("feeds", handlerFeeds)
 
 	if len(os.Args) < 2 {
 		fmt.Println("Error: not enough arguments provided")
@@ -95,13 +170,4 @@ func main() {
 	if err != nil {
 		log.Fatalf("Command error: %v", err)
 	}
-
-	cfg, err = config.Read()
-	if err != nil {
-		log.Fatalf("error reading updated config: %v", err)
-	}
-
-	fmt.Println("Config after command:")
-	fmt.Printf("DB URL: %s\n", cfg.DBURL)
-	fmt.Printf("Current User: %s\n", cfg.CurrentUsername)
 }
