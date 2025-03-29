@@ -7,61 +7,55 @@ import (
 )
 
 type Config struct {
-	DbURL string `json:"db_url"`
-	CurrentUsername string `json:"current_user_name,omitempty"`
+	DBURL string `json:"db_url"`
+	CurrentUsername string `json:"current_user_name"`
 }
 
-const configFileName = ".gatorconfig.json"
-
-func READ() (Config, error) {
-	newStruct := Config{}
-
-	filePath, err := getConfigFilePath()
-	if err != nil {
-		return newStruct, err
-	}
-
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return newStruct, err
-	}
-
-	err = json.Unmarshal(data, &newStruct)
-	if err != nil {
-		return newStruct, err
-	}
-
-	return newStruct, nil
-}
-
-func (c *Config) SetUser(username string) error {
-	c.CurrentUsername = username
-	return write(*c)
-}
+const configFileNmae = ".gatorconfig.json"
 
 func getConfigFilePath() (string, error) {
-	homeDirectory, err := os.UserHomeDir()
+	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(homeDirectory, configFileName), nil
+	return filepath.Join(home, configFileNmae), nil
 }
 
-func write(c Config) error {
+func Read() (Config, error) {
+	filePath, err := getConfigFilePath()
+	if err != nil {
+		return Config{}, err
+	}
+
+	file, err := os.ReadFile(filePath)
+	if err != nil {
+		return Config{}, err
+	}
+
+	var cfg Config
+	err = json.Unmarshal(file, &cfg)
+	if err != nil {
+		return Config{}, err
+	}
+
+	return cfg, nil
+}
+
+func (cfg *Config) SetUser(username string) error {
+	cfg.CurrentUsername = username
+	return write(*cfg)
+}
+
+func write(cfg Config) error {
 	filePath, err := getConfigFilePath()
 	if err != nil {
 		return err
 	}
 
-	data, err := json.MarshalIndent(c, "", " ")
+	jsonData, err := json.MarshalIndent(cfg, "", " ")
 	if err != nil {
 		return err
 	}
-
-	err = os.WriteFile(filePath, data, 0600)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	
+	return os.WriteFile(filePath, jsonData, 0600)
 }
