@@ -1,11 +1,17 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
+
 	"github.com/josequiceno2000/gator/internal/config"
+	"github.com/josequiceno2000/gator/internal/database"
+	_ "github.com/lib/pq"
 )
 
 type state struct {
+	DB *database.Queries
 	CfgPointer *config.Config
 }
 
@@ -20,7 +26,18 @@ func handlerLogin(s *state, cmd command) error {
 	}
 
 	username := cmd.Arguments[0]
-	err := s.CfgPointer.SetUser(username)
+
+	// Check if the user exists in the database
+	_, err := s.DB.GetUser(context.Background(), username)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("login: user '%s' does not exist", username)
+		}
+		return fmt.Errorf("login: failed to check user instance: %w", err)
+	}
+
+
+	err = s.CfgPointer.SetUser(username)
 	if err != nil {
 		return fmt.Errorf("failed to set user: %w", err)
 	}
