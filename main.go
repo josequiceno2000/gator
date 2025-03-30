@@ -15,6 +15,91 @@ import (
 	_ "github.com/lib/pq"
 )
 
+func middlewareLoggedIn(handler func(s *state, cmd command, user database.User) error) func(*state, command) error {
+	return func(s *state, cmd command) error {
+		user, err := s.DB.GetUser(context.Background(), s.CfgPointer.CurrentUsername)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				return fmt.Errorf("user '%s' does not exist", s.CfgPointer.CurrentUsername)
+			}
+			return fmt.Errorf("failed to get user: %w", err)
+		}
+
+		return handler(s, cmd, user)
+	}
+}
+
+func handlerUnfollow(s *state, cmd command, user database.User) error {
+	if len(cmd.Arguments) < 1 {
+		return errors.New("unfollow: url argument is required")
+	}
+
+	url := cmd.Arguments[0]
+
+	err := s.DB.DeleteFeedFollow(context.Background(), database.DeleteFeedFollowParams{
+		UserID: user.ID,
+		Url: url,
+	})
+
+	if err != nil {
+		return fmt.Errorf("unfollow: failed to unfollow feed: %w", err)
+	}
+
+	fmt.Printf("Unfollowed feed with URL: %s\n", url)
+	return nil
+}
+
+func handlerFollowing(s *state, cmd command, user database.User) error {
+	user, err := s.DB.GetUser(context.Background(), s.CfgPointer.CurrentUsername)
+	if err != nil {
+		return fmt.Errorf("following: failed to get user: %w", err)
+	}
+
+	feedFollows, err := s.DB.GetFeedFollowsForUser(context.Background(), user.ID)
+	if err != nil {
+		return fmt.Errorf("following, failed to get feed follows: %w", err)
+	}
+
+	for _, ff := range feedFollows {
+		fmt.Println(ff.FeedName)
+	}
+
+	return nil
+}
+
+func handlerFollow(s *state, cmd command, user database.User) error {
+	if len(cmd.Arguments) < 1 {
+		return errors.New("follow: url argument is required")
+	}
+
+	url := cmd.Arguments[0]
+
+	user, err := s.DB.GetUser(context.Background(), s.CfgPointer.CurrentUsername)
+	if err != nil {
+		return fmt.Errorf("follow: failed to get user: %w", err)
+	}
+
+	feed, err := s.DB.GetFeedByUrl(context.Background(), url)
+	if err != nil {
+		return fmt.Errorf("follow: failed to get feed: %w", err)
+	}
+
+	feedFollow, err := s.DB.CreateFeedFollow(context.Background(), database.CreateFeedFollowParams{
+		ID: uuid.New(),
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+		UserID: user.ID,
+		FeedID: feed.ID,
+	})
+
+	if err != nil {
+		return fmt.Errorf("follow: failed to create feed follow: %w", err)
+	}
+
+	fmt.Printf("Followed feed: %s by user: %s\n", feedFollow.FeedName, feedFollow.UserName)
+	return nil
+}
+
 func handlerFeeds(s * state, cmd command) error {
 	feeds, err := s.DB.GetFeedsWithUserNames(context.Background())
 	if err != nil {
@@ -28,7 +113,7 @@ func handlerFeeds(s * state, cmd command) error {
 	return nil
 }
 
-func handlerAddFeed(s *state, cmd command) error {
+func handlerAddFeed(s *state, cmd command, user database.User) error {
 	if len(cmd.Arguments) < 2 {
 		return errors.New("addfeed: name and url arguments are required")
 	}
@@ -45,19 +130,31 @@ func handlerAddFeed(s *state, cmd command) error {
 	}
 
 	feed, err := s.DB.CreateFeed(context.Background(), database.CreateFeedParams{
+        ID:        uuid.New(),
+        CreatedAt: time.Now().UTC(),
+        UpdatedAt: time.Now().UTC(),
+        Name:      name,
+        Url:       url,
+        UserID:    user.ID,
+    })
+
+    if err != nil {
+        return fmt.Errorf("addfeed: failed to create feed: %w", err)
+    }
+
+	_, err = s.DB.CreateFeedFollow(context.Background(), database.CreateFeedFollowParams{
 		ID: uuid.New(),
 		CreatedAt: time.Now().UTC(),
 		UpdatedAt: time.Now().UTC(),
-		Name: name,
-		Url: url,
 		UserID: user.ID,
+		FeedID: feed.ID,
 	})
 
 	if err != nil {
-		return fmt.Errorf("addfeed: failed to create feed: %w", err)
+		return fmt.Errorf("addfeed: failed to create feed follow: %w", err)
 	}
 
-	fmt.Printf("Feed created: %+v\n", feed)
+	fmt.Printf("Feed created and dollowed: %+v\n", feed)
 	return nil
 }
 
@@ -153,8 +250,11 @@ func main() {
 	cmdRegistry.register("reset", handlerReset)
 	cmdRegistry.register("users", handlerUsers)
 	cmdRegistry.register("agg", handlerAgg)
-	cmdRegistry.register("addfeed", handlerAddFeed)
+	cmdRegistry.register("addfeed", middlewareLoggedIn(handlerAddFeed))
 	cmdRegistry.register("feeds", handlerFeeds)
+	cmdRegistry.register("follow", middlewareLoggedIn(handlerFollow))
+	cmdRegistry.register("following", middlewareLoggedIn(handlerFollowing))
+	cmdRegistry.register("unfollow", middlewareLoggedIn(handlerUnfollow))
 
 	if len(os.Args) < 2 {
 		fmt.Println("Error: not enough arguments provided")
