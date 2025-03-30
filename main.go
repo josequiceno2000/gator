@@ -15,6 +15,31 @@ import (
 	_ "github.com/lib/pq"
 )
 
+func scrapeFeeds(s *state) {
+	feed, err := s.DB.GetNextFeedToFetch(context.Background())
+	if err != nil {
+		log.Printf("scrapeFeeds: failed to get next feed: %v", err)
+	}
+
+	log.Printf("scrapeFeeds: fetching feed: %s", feed.Url)
+
+	err = s.DB.MarkFeedFetched(context.Background(), feed.ID)
+	if err != nil {
+		log.Printf("scrapeFeeds: failed to mark feed as fetched: %v", err)
+		return
+	}
+
+	rssFeed, err := fetchFeed(context.Background(), feed.Url)
+	if err != nil {
+		log.Printf("scrapeFeeds: failed to fetch feed: %v", err)
+		return
+	}
+
+	for _, item := range rssFeed.Channel.Item {
+		log.Printf("scrapeFeeds: post title: %s", item.Title)
+	}
+}
+
 func middlewareLoggedIn(handler func(s *state, cmd command, user database.User) error) func(*state, command) error {
 	return func(s *state, cmd command) error {
 		user, err := s.DB.GetUser(context.Background(), s.CfgPointer.CurrentUsername)
@@ -159,11 +184,26 @@ func handlerAddFeed(s *state, cmd command, user database.User) error {
 }
 
 func handlerAgg(s *state, cmd command) error {
-	feed, err := fetchFeed(context.Background(), "https://wagslane.dev/index.xml")
-	if err != nil {
-		return fmt.Errorf("agg: failed to fetch feed %w", err)
+	if len(cmd.Arguments) < 1 {
+		return errors.New("agg: time_between_reqs argument is required")
 	}
-	fmt.Printf("%+v\n", feed)
+
+	timeBetweenRequests, err := time.ParseDuration(cmd.Arguments[0])
+	if err != nil {
+		return fmt.Errorf("agg: invalid duration: %w", err)
+	}
+
+	log.Printf("agg: collecting feeds every %s", timeBetweenRequests)
+
+	ticker := time.NewTicker(timeBetweenRequests)
+	defer ticker.Stop()
+
+	scrapeFeeds(s)
+
+	for range ticker.C {
+		scrapeFeeds(s)
+	}
+
 	return nil
 }
 
