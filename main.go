@@ -1,12 +1,14 @@
-package main 
+package main
 
 import (
 	"context"
-	"errors"
 	"database/sql"
-	"os"
+	"errors"
 	"fmt"
 	"log"
+	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -36,7 +38,39 @@ func scrapeFeeds(s *state) {
 	}
 
 	for _, item := range rssFeed.Channel.Item {
-		log.Printf("scrapeFeeds: post title: %s", item.Title)
+		publishedAt, err := time.Parse(time.RFC3339, item.PubDate)
+		if err != nil {
+			publishedAt, err = time.Parse(time.RFC1123Z, item.PubDate)
+			if err != nil {
+				log.Printf("scrapeFeeds: failed to parse published_at: %v", err)
+				continue
+			}
+		}
+
+		var description sql.NullString
+		if item.Description != "" {
+			description.String = item.Description
+			description.Valid = true
+		} else {
+			description.Valid = false
+		}
+
+		_, err = s.DB.CreatePost(context.Background(), database.CreatePostParams{
+			ID: uuid.New(),
+			CreatedAt: time.Now().UTC(),
+			UpdatedAt: time.Now().UTC(),
+			Title: item.Title,
+			Url: item.Link,
+			Description: description,
+			PublishedAt: publishedAt.UTC(),
+			FeedID: feed.ID,
+		})
+		if err != nil {
+			if strings.Contains(err.Error(), "duplicate key value violates unique constraint") {
+				continue
+			}
+			log.Printf("scrapeFeeds: failed to create post: %v", err)
+		}
 	}
 }
 
@@ -52,6 +86,32 @@ func middlewareLoggedIn(handler func(s *state, cmd command, user database.User) 
 
 		return handler(s, cmd, user)
 	}
+}
+
+func handlerBrowse(s *state, cmd command, user database.User) error {
+	limit := int32(2)
+
+	if len(cmd.Arguments) > 0 {
+		parsedLimit, err := strconv.ParseInt(cmd.Arguments[0], 10, 32)
+		if err != nil {
+			return errors.New("browse: invalid limit argument")
+		}
+		limit = int32(parsedLimit)
+	}
+
+	posts, err := s.DB.GetPostsForUser(context.Background(), database.GetPostsForUserParams{
+		UserID: user.ID,
+		Limit: limit,
+	})
+	if err != nil {
+		return fmt.Errorf("browse: failed to get posts: %w", err)
+	}
+
+	for _, post := range posts {
+		fmt.Printf("Title: %s\nURL: %s\nPublished: %s\n\n", post.Title, post.Url, post.PublishedAt)
+	}
+
+	return nil
 }
 
 func handlerUnfollow(s *state, cmd command, user database.User) error {
@@ -295,6 +355,7 @@ func main() {
 	cmdRegistry.register("follow", middlewareLoggedIn(handlerFollow))
 	cmdRegistry.register("following", middlewareLoggedIn(handlerFollowing))
 	cmdRegistry.register("unfollow", middlewareLoggedIn(handlerUnfollow))
+	cmdRegistry.register("browse", middlewareLoggedIn(handlerBrowse))
 
 	if len(os.Args) < 2 {
 		fmt.Println("Error: not enough arguments provided")
